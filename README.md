@@ -18,8 +18,10 @@ update/wipe your system-index accordingly.
 
     ;; See 'local-projects' note in preceding paragraph            
     (ql:quickload :clj-con) ; to use the code
+
 or
-    ;; To run the test
+
+    ;; To run the test (again, see 'local-projects' note)
     (ql:quickload :clj-con-test)
     (in-package :clj-con-test)
     (explain! (run 'test-suite))
