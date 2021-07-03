@@ -10,11 +10,11 @@ Or, if you're familiar with the Clojure Cheatsheet, the project implements the f
 
 along with `promise` and `deliver`.
 
-# Usage
+## Usage
 
-I'm hoping to get this into quicklisp at some point, for now you can quickload
-it if you link to it in your quicklisp `local-projects` subdirectory and
-update/wipe your system-index accordingly.
+If you didn't this via quickload from the quickload repo (because it isn't
+there yet), add it to your `~/quicklisp/localprojects/` directory, update/wipe
+the `system-index` file accordinatly, and then you can quickload it.
 
     ;; See 'local-projects' note in preceding paragraph            
     (ql:quickload :clj-con) ; to use the code
@@ -23,36 +23,32 @@ or
 
     ;; To run the test (again, see 'local-projects' note)
     (ql:quickload :clj-con-test)
-    (in-package :clj-con-test)
-    (explain! (run 'test-suite))
+    (clj-con-test:run-tests)
 
-# Implementation Status
+## Implementation Status
 
-This was just a whim to bring Clojure's concurrency operators, which I like to
-use in unit testing threaded services, to Common Lisp, mostly because I like to use
-them in unit testing threaded services. This initial implementation hasn't been tested beyond the
-unit tests at all (and only on SBCL), so set your expectations accordingly.
+The current implementation was tested on `sbcl` and `abcl` successfully (with
+20 iterations of `run-tests` on each, because, you know, threads and all).
 
 The definitions are meant to be portable and are implemented entirely on
-Bordeaux Threads, but for those same reason they aren't terribly efficient (as
+Bordeaux Threads, but for those same reasons they aren't terribly efficient (as
 BT has no condition variable broadcast, no compare-and-set, and so on). At some point
 I could see adding some optimized conditional compilations.
 
-
-# Differences from Clojure
+## Differences from Clojure
 
 `reset-vals!` and `swap-vals!` return vectors in Clojure but return
 multiple values here. I couldn't see the point of returning vectors when CL
 has no destructuring bind (outside of LOOP?) that works on vectors. At least you can use
 multiple-value-bind if you want.
 
-# `atom` package conflict
+## `atom` package conflict
 
 If you're going to `(use :clj-con)`, note that `atom` requires a
 `(:shadowing-import-from #:clj-con #:atom)`.  I'm open to better ways to do
 this, I'm not much practiced in the arts of Common Lisp packages.
 
-# Use of `interrupt-thread` by `future-cancel`
+## Use of `interrupt-thread` by `future-cancel`
 
 The Java Virtual Machine's threading tools are really a marvelous thing.  If
 you've been in that ecosystem a long time, going back to pthreads with some of
@@ -66,7 +62,7 @@ handlers in the threads unless you have taken to heart the use of
 WITHOUT-INTERRUPTS and other implementation dependent things. I didn't hit any
 problems with my simple tests but that isn't saying much.
 
-# Non-Goals
+## Non-Goals
 
 There is no attempt here to bring clojure syntax or persistent data structures to
 Common Lisp.  Fortunately neither of those things is particularly prevalent in
@@ -77,13 +73,13 @@ Some enterprising person might want to make a readtable that maps `@` to
 `deref`, assuming it doesn't conflict with `,@`, but that hasn't been done
 here so you'll just have to call `deref`.
 
-# Blocking Queues?
+## Blocking Queues?
 
 If you're missing clojure.core.async and want some blocking queues for producer/consumer
 situations, take a look at the `lparallel.queue` package `(ql:quickload
 :lparallel)`. Unlike clojure.core.async it has a `peek` operator which I find useful
 when I need to speculatively try something on a queue element without losing FIFO ordering.
 
-# Feedback welcome
+## Feedback welcome
 
 `(reverse "moc.liamg@ynnet.evad")`

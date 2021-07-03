@@ -3,6 +3,7 @@
 (defpackage :clj-con-test
   (:use :cl :bt :clj-con :fiveam)
   (:shadowing-import-from #:clj-con #:atom)
+  (:export #:run-tests)
   (:documentation "Tests for the :clj-con package."))
 
 (in-package :clj-con-test)
@@ -123,10 +124,13 @@
                 456)))
       (is (eql 123 (deref f1 10000 nil)))
       (is (eql 456 (deref f2 10000 nil)))
-      ;; b will have perfectly descending sequence from 40 to 1.
       (is (= 40 (deref a)))
-      (is (equalp (loop for x from 40 downto 1 collecting x) (deref b))))))
+      (let ((expected (loop for x from 40 downto 1 collecting x))
+            (actual (deref b)))
+        (is (null (set-exclusive-or expected actual)))))))
 
-;;(explain! (run 'test-suite))
+(defun run-tests ()
+  "Run all :clj-con tests."
+  (explain! (run 'test-suite)))
 
 ;; Test what happens if we call future-cancel on a pending wait/lock?
