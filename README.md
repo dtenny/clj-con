@@ -12,9 +12,9 @@ along with `promise` and `deliver`.
 
 ## Usage
 
-If you didn't this via quickload from the quickload repo (because it isn't
+If you didn't get this via quickload from the quickload repo (because it isn't
 there yet), add it to your `~/quicklisp/localprojects/` directory, update/wipe
-the `system-index` file accordinatly, and then you can quickload it.
+the `system-index.txt` file accordingly, and then you can quickload it.
 
     ;; See 'local-projects' note in preceding paragraph            
     (ql:quickload :clj-con) ; to use the code
