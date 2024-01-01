@@ -1,7 +1,7 @@
 (in-package :cl-user)
 
 (defpackage :clj-con
-  (:use :cl :bt)                        ;:bt == :bordeaux-threads
+  (:use :cl)
   (:shadow atom) 
 
   (:export

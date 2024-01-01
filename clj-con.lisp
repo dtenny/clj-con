@@ -1,12 +1,6 @@
 (in-package :clj-con)
 
-;;; TBD, whether to support a reader macro for `@` on promises, futures, and so on, 
-;;; that expands to `deref`.
-
-;;; TBD, if we were to implement `locking`, it'd be nice to implment wait() and notify()
-;;; and notifyAll() with some kind of monitor implementation.  You could also do a poor man's
-;;; CLOS inheritance of some kind of 'monitored' class, which added the nessary support.
-;;; Meanwhile, you'll notice there's no `locking` exported by this module.
+;;; Assumption: threads that have exited are reclaimed by GC. (Correct?)
 
 ;;; Behavior of futures with respect to the following functions and future states.
 ;;;
@@ -25,24 +19,26 @@
 ;;; Behavior implemented matches the above clojure behaviors 
 ;;; (with conditions rather than exceptions), and T/NIL instead of true/false.
 
-
-;;; On blocking processes: promises can block multiple threads. SBCL thread
-;;; support has a 'broadcast' operation to wake them all, but Bordeaux threads
-;;; does not (and I'm trying to stick with Bordeaux threads for portability).
-;;; So I'm counting the waiting threads myself and looping on the notify calls. Seems to
-;;; work, at least for SBCL.  Let me know if there's a cleaner way, nothing
-;;; leaped out at me looking at Bordeaux threads.
+;;; CAUTION: Note that the bordeaux-threads `condition-wait` semantics differ
+;;; from SBCL's `sb-thread:condition-wait` semantics.
+;;; - SBCL's will not re-aquire the lock when it returns nil.
+;;; - BT _will_ re-aquire the lock when it return nil.  
 
 (defstruct promise
   "A promise object as created by the `promise` function."
   condition-variable                    ;nil when realized
   lock
-  waiter-count                          ;n-threads to notify
   value)                                ;== cv until realized
+
+(defmethod print-object ((promise promise) stream)
+  (print-unreadable-object (promise stream :type t :identity t)
+    ;; Using `promise-realized?` here without a lock, contrary to other code.
+    (format stream "~S" (promise-realized? promise))))
 
 (defstruct (future (:predicate future?))
   "A future object returned by the `future` macro."
   thread                                ;thread executing the function
+  lock                                  ;synchronized future state mgmt
 
   ;; :ready if not started or executing
   ;; :success if the future will have meaningful value
@@ -54,6 +50,10 @@
   ;; that caused future failure.
   promise                               ;promise notified with function result
   )
+
+(defmethod print-object ((future future) stream)
+  (print-unreadable-object (future stream :type t :identity t)
+    (format stream "~S" (future-status future))))
 
 (define-condition thread-interrupted () ()
   (:documentation
@@ -77,17 +77,8 @@ Named for similarity to clojure/java behavior on deref."))
 
 (defmacro with-future-lock (future &body body)
   "Execute body with the future locked."
-  `(bt:with-lock-held ((promise-lock (future-promise (the future ,future))))
+  `(bt2:with-lock-held ((future-lock ,future))
      ,@body))
-
-(defun update-future-status (future new-status)
-  "Acquire a lock on the future and update its status to `new-status`.
-  Return the old status."
-  (declare (future future))
-  (with-future-lock future
-    (let ((old-status (future-status future)))
-      (setf (future-status future) new-status)
-      old-status)))
 
 (defun promise-realized? (p)
   "True if value has been supplied, caller must lock before calling."
@@ -99,33 +90,38 @@ once only, with `deliver`. Calls to deref prior to delivery will
 block unless the variant of deref with timeout is used. All
 subsequent derefs will return the same delivered value without
 blocking. See also - `realized?`."
-  (let ((cv (bt:make-condition-variable)))
+  (let ((cv (bt2:make-condition-variable)))
     (make-promise 
-     :lock (bt:make-recursive-lock)
-     :waiter-count 0
+     :lock (bt2:make-lock)
      :value cv                           ; 
      :condition-variable cv)))
 
 (defun deliver (promise val)
   "Delivers the supplied value to the promise, allowing the return of any blocked derefs.
 A subsequent call to deliver on a promise will have no effect.
-Returns val."
+
+The first deliver call will return the promise.  
+Subsequent calls to deliver return NIL.
+This is compatible with Clojure, though note that 
+`(deliver p 123) (deliver p true)` in clojure causes a ClassCastException,
+whereas here the second call returns false."
   (declare (promise promise))
-  (bt:with-recursive-lock-held ((promise-lock promise))
-    (when (eql (promise-value promise) (promise-condition-variable promise))
-      (setf (promise-value promise) val)
-      (let ((cvar (promise-condition-variable promise)))
-        (setf (promise-condition-variable promise) nil)
-        (loop repeat (promise-waiter-count promise)
-           do (bt:condition-notify cvar)))))
-  val)
+  (bt2:with-lock-held ((promise-lock promise))
+    (if (eql (promise-value promise) (promise-condition-variable promise))
+        (progn
+          (setf (promise-value promise) val)
+          (let ((cvar (promise-condition-variable promise)))
+            (setf (promise-condition-variable promise) nil)
+            (bt2:condition-broadcast cvar))
+          promise)
+        nil)))
 
 (defgeneric realized? (x)
   (:documentation "Returns true if a value has been produced for a promise or future, nil otherwise.")
   (:method ((f future))
     (realized? (future-promise f)))
   (:method ((p promise))
-    (bt:with-lock-held ((promise-lock p))
+    (bt2:with-lock-held ((promise-lock p))
       (promise-realized? p))))
 
 (defgeneric deref (thing &optional timeout-ms timeout-val)
@@ -145,58 +141,79 @@ When applied to a promise, will block until a value is delivered.
 When called with timeout options (valid only for promises and futures),
 can be used for blocking and will return
 timeout-val if the timeout (in milliseconds) is reached before a
-value is available. See also - realized?.")
+value is available. See also - realized?.
 
-  (:method ((f future) &optional (timeout-ms nil timeout-supplied-p) timeout-val)
-    (let ((s (with-future-lock f (future-status f))))
-      (case s
-        (:success   (deref (future-promise f))) ; timeout shouldn't be necessary, if supplied
-        (:cancelled (error (make-condition 'cancellation-exception)))
-        (:unwound   (error (make-condition 'execution-exception)))
-        ;; Block on promise (possibly with timeout), check future status again after that
-        ;; I'm not quite sure this is tight if it comes back ready after derefing the promise
-        (:ready     (let ((v (if timeout-supplied-p
-                                 (deref (future-promise f) timeout-ms timeout-val)
-                                 (deref (future-promise f)))))
-                      (if (eql v timeout-val)
-                          v
-                          (let ((s (with-future-lock f (future-status f))))
-                            (case s
-                              (:success v)
-                              ((:cancelled :unwound) (deref f)) ; recurse to handle negative case
-                              (:ready ; why are we still ready?
-                               (error "Why is this future still in a ready state? ~s" f))
-                              (t (error "Unexpected future-status ~s in future ~s" s f)))))))
-        (t          (error "Unexpected future-status ~s" s)))))
+Note that a call to `deref` with a timeout the returns the timeout value
+does not force the promise/future to be `realized?`, it may remain unrealized.
 
-  ;; Note that CL expects timeouts in terms of seconds, which may be real values expressing
-  ;; fractions of seconds.  That's true of `sleep`, and also the condition variable timeouts.
+Note that if timeout-ms is supplied, timeout-val is also required, to maintain
+parity with Clojure's arity-1 and arity-3 (but no arity-2) calls.")
+
+  (:method ((f future) &optional (timeout-ms nil timeout-supplied-p)
+                         (timeout-val nil timeout-val-supplied-p))
+    (when (and timeout-supplied-p (not timeout-val-supplied-p))
+      (error "TIMEOUT-VAL is required if TIMEOUT-MS is supplied"))
+    (with-future-lock f
+      (let ((s (future-status f)))
+        (case s
+          (:success   (deref (future-promise f))) ; timeout data not needed
+          ;; TBD: I have seen weasel words about lock release being unpredictable
+          ;; when conditions are signalled.  Not sure what to do yet.
+          (:cancelled (error (make-condition 'cancellation-exception)))
+          (:unwound   (error (make-condition 'execution-exception)))
+          ;; Still executing, release the future lock so it can post success
+          ;; to the future.
+          (t (unless (eq s :ready)
+               (error "Unexpected future-status ~s in future ~s" s f))))))
+    ;; Future was still executing (in :ready state), wait on the promise
+    (let ((v (if timeout-supplied-p
+                 (deref (future-promise f) timeout-ms timeout-val)
+                 (deref (future-promise f)))))
+      ;; If we didn't timeout, the future _must_ have completed, because
+      ;; deref on the promise without a timeout should not be spurious
+      ;; (unlike the condition variable it uses under the hood).
+      ;; However the future could still have encountered a condition
+      ;; and so whatever the above deref gave us takes a back seat
+      ;; if :cancelled or :unwound apply. This is consistent with clojure, see chart
+      ;; at top of module.
+
+      ;; Not locking here.  If we get "ready" but it transitioned to success
+      ;; while we're looking, we don't care. If we got the timeout value
+      ;; before thread cancellation or unwinding, we return the timeout value
+      (if (eql v timeout-val)
+          v
+          (let ((s (future-status f)))
+            (case s
+              (:ready (error "Unexpected status ~s in future ~s after promise deref." s f))
+              (:cancelled (error (make-condition 'cancellation-exception)))
+              (:unwound   (error (make-condition 'execution-exception)))
+              (:success v)
+              (t (error "Unexpected future-status ~s in future ~s" s f)))))))
+
+  ;; Note that CL expects timeouts in terms of seconds, which may be real values
+  ;; expressing fractions of seconds.  That's true of `sleep` and also the condition
+  ;; variable timeout specifications.
   (:method ((p promise) &optional (timeout-ms nil timeout-supplied-p) timeout-val)
-    (let ((timeout-secs (and timeout-supplied-p (/ timeout-ms 1000))))
-      (bt:with-lock-held ((promise-lock p))
-        (if (promise-realized? p)
-            (promise-value p)
-            (progn
-              (incf (promise-waiter-count p))
-              (if timeout-secs
-                  ;; Timeout, may return nil meaning lock not held and timeout expired.
-                  ;; Return T means lock held, timeout may or may not have expired.
-                  (if (not (bt:condition-wait (promise-condition-variable p) (promise-lock p) 
-                                              :timeout timeout-secs))
-                      ;; Timeout, no lock held.
-                      timeout-val
-                      ;; Possible timeout, lock held
-                      (if (promise-realized? p)
-                          (promise-value p)
-                          timeout-val))
-                  ;; No timeout, lock always reacquired before returning T
-                  (progn (bt:condition-wait (promise-condition-variable p) (promise-lock p))
-                         (if (promise-realized? p)
-                             (promise-value p)
-                             (progn
-                               (assert (> (promise-waiter-count p) 0))
-                               (decf (promise-waiter-count p)) ;to correct for the incf coming up on recursion
-                               (deref p))))))))))) ;recurse and reenter wait after spurious wakeup
+    (let ((timeout-secs (and timeout-supplied-p (/ timeout-ms 1000)))
+          (cv (promise-condition-variable p))
+          (lock (promise-lock p)))
+      (when timeout-secs
+        (assert (> timeout-secs 0)))
+      (bt2:with-lock-held (lock)
+        (loop until (promise-realized? p)
+              do (unless (bt2:condition-wait cv lock :timeout timeout-secs)
+                   (return timeout-val)) ;NIL waitval == timeout
+                 ;; ABCL _always_ returns true on CONDITION-WAIT
+                 ;; Avoid infinite loop looking for NIL timeout value from wait
+                 ;; and try to provide deref timeout semantics.
+                 ;; Unfortunately, this breaks timeout tests on CCL and perhaps
+                 ;; others, so we are picky about when we enable it.
+                 #+ABCL
+                 (when timeout-secs
+                   (if (promise-realized? p)
+                       (return (promise-value p))
+                       (return timeout-val)))
+              finally (return (promise-value p)))))))
 
 (defun future-call (thunk)
   "Takes a function of no args and yields a future object that will
@@ -205,24 +222,42 @@ return it on all subsequent calls to deref. If the computation has
 not yet finished, calls to deref will block, unless the variant
 of deref with timeout is used. See also - realized?."
   (let* ((result-promise (promise))
-         (future (make-future :status :ready :promise result-promise))
-         (thread (bt:make-thread 
+         (future (make-future :status :ready 
+                              :promise result-promise
+                              :lock (bt2:make-lock)))
+         (thread (bt2:make-thread 
                   (lambda () 
                     (handler-case (let ((result (funcall thunk)))
+                                    ;; Want future lock to span future and
+                                    ;; promize updates, so no `update-future-status`
                                     (with-future-lock future
                                       (setf (future-status future) :success)
                                       (deliver result-promise result)))
                       (thread-interrupted (c)
                         (declare (ignore c))
-                        ;; The cancelling thread already set the future status to :cancelled.
-                        ;; And delivered to promise since it was already holding the lock.
-                        ;; So the important thing is that we've interrupted the thunk(?)
-                        ;; and are about to return from the thread.
-                        ;;(deliver result-promise c)
-                        ) ; return-from-thread?
+                        ;; Assuming the thread interrupt came only from
+                        ;; `future-cancel`, which may not be a good idea.  TBD.
+
+                        ;; The cancelling thread already set the future status to
+                        ;; :cancelled.  And delivered to promise since it was already
+                        ;; holding the lock.  So the important thing is that we've
+                        ;; interrupted the thunk(?)  and are about to return from the
+                        ;; thread. If assertion below fails, we may need to do this:
+                        ;;    (deliver result-promise c)
+
+                        ;; If the future isn't in cancelled state, then
+                        ;; this interrupt was received from some source
+                        ;; other than future-cancel and we want to know about it.
+                        (assert (eql :cancelled (future-status future))))
                       (t (condition) 
-                        (update-future-status future :unwound)
-                        (deliver result-promise condition)))))))
+                        (assert condition)
+                        ;; future lock to span future _and_ promise updates
+                        (with-future-lock future
+                          (setf (future-status future) :unwound)
+                          (deliver result-promise condition))))))))
+    ;; Retaining this thread for debugging.  Hopefully not a GC issue
+    ;; We shouldn't actually *need* the thread attached to the future object
+    ;; for anything other than debugging
     (setf (future-thread future) thread)
     future))
 
@@ -251,7 +286,7 @@ InterruptedException."
       (when (eql :ready old-status)
         (setf (future-status future) :cancelled)
         (deliver (future-promise future) (make-condition 'thread-interrupted))
-        (bt:interrupt-thread (future-thread future)
+        (bt2:interrupt-thread (future-thread future)
                              ;; sb-thread:return-from-thread?
                              (lambda () (signal 'thread-interrupted)))))
     ;; `future-cancel` is successful only if we successfully cancelled the future.
@@ -267,10 +302,11 @@ InterruptedException."
   "Return T if future is done, NIL otherwise.
 It is 'done' if it is in any state other than :ready 
 (thus hasn't started, or is executing the supplied forms)."
+  (declare (future future))
   ;; If I know more about what constituted safe/atomic/volatile operations in CL
   ;; I'd skip the lock. Right new CL & BT tool nuances are new to me.
   ;; I'm guessing an SBCL barrier would be enough, BT doesn't supply barriers.
-  (not (eql :ready (with-future-lock (future-status future)))))
+  (not (eql :ready (with-future-lock future (future-status future)))))
 
 ;; *TBD*: what happens if we unwind when waiting on a condition varaible?
 ;; i.e. (future (deref p)) (future-cancel *)
