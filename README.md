@@ -12,11 +12,14 @@ along with `promise` and `deliver`.
 
 ## Usage
 
-If you didn't get this via quickload from the quickload repo (because it isn't
-there yet), add it to your `~/quicklisp/localprojects/` directory, update/wipe
-the `system-index.txt` file accordingly, and then you can quickload it.
+Mar-03-2024: Added to Ultralisp because quicklisp hasn't been updated in 5
+months and ther are updates I really wanted to get out.
 
-    ;; See 'local-projects' note in preceding paragraph            
+If you didn't get this via quickload a quicklisp/ultralisp repo, add it to
+your `~/quicklisp/localprojects/` directory, update/wipe the
+`system-index.txt` file accordingly, and then you can quickload it.
+
+    ;; See 'local-projects' note in preceding paragraph
     (ql:quickload :clj-con) ; to use the code
 
 or
