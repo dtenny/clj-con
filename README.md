@@ -13,10 +13,10 @@ along with `promise` and `deliver`.
 ## Usage
 
 Mar-03-2024: Added to Ultralisp because quicklisp hasn't been updated in 5
-months and ther are updates I really wanted to get out.
+months and there are updates I really wanted to get out.
 
-If you didn't get this via quickload a quicklisp/ultralisp repo, add it to
-your `~/quicklisp/localprojects/` directory, update/wipe the
+If you didn't get this via quickload using a quicklisp/ultralisp repo, add it to
+your `~/quicklisp/localprojects/` directory and update/wipe the
 `system-index.txt` file accordingly, and then you can quickload it.
 
     ;; See 'local-projects' note in preceding paragraph
@@ -24,7 +24,7 @@ your `~/quicklisp/localprojects/` directory, update/wipe the
 
 or
 
-    ;; To run the test (again, see 'local-projects' note)
+    ;; To run the tests
     (ql:quickload :clj-con-test)
     (clj-con-test:run-tests)
 
@@ -34,7 +34,7 @@ This package will wishfully run on any lisp supporting `bordeaux-threads`,
 which is most of them. 
 
 Lisps supporting the `atomics` package will use `compare-and-swap` behavior
-via `atomics:cas` for the `atom` implementatio. At the time
+via `atomics:cas` for the `atom` implementation. At the time
 of this writing (DEC 2023), that includes:
 
 - Allegro
@@ -64,7 +64,8 @@ All tests were run with default memory configurations. I have no explanation
 for why some of them seem to be running out of memory, though some may be
 running with overly conservative heap sizes by default.
 The test suite allocates fewer than 50 threads, but the CLJ-CON package
-does expect threads to be reclaimed when the lisp code run on them returns.
+does expect threads to be (eventually) reclaimed when the lisp code running
+on them returns.
 
 Given that the test suite does deliberately signal conditions in the bodies
 of many thread tests I suppose it's possible threads are hung and locks
