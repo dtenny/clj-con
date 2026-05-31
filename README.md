@@ -28,10 +28,41 @@ or
     (ql:quickload :clj-con-test)
     (clj-con-test:run-tests)
 
+## Example
+
+A lousy example of CLJ-CON, but some people will relate. Here's
+a quick and dirty background alarm in your REPL:
+
+    (defun alarm (seconds &optional description)
+      "Create an asynchronous task which will try to deliver an alarm notification via *standard-output* and
+    the linux `notify-send` tool if it is available.  The optional description will appear in the message
+    if provided."
+      (clj-con:future 
+        (sleep seconds)
+        (loop repeat 3 do (write-char #\bell) (finish-output))
+        (if description
+            (setf description (format nil " for ~a" description))
+            (setf description ""))
+        (format t "ALARM! ~d seconds is up~a!~%" seconds description)
+        (handler-case 
+            (uiop:launch-program
+             (list "notify-send" "ALARM" (format nil "~d seconds is up~a!" seconds description)))
+          (cl:error () (format *error-output* "Attempt to invoke `notify-send` failed.")))))
+
+    CL-USER> (alarm 10 "Hey!")
+    #<CLJ-CON:FUTURE :RUNNING {123E491C53}>
+    CL-USER> (print "hello world") ;do something while we wait for alarm to go off
+
+    "hello world" 
+    "hello world"
+    🔔🔔🔔ALARM! 10 seconds is up for Hey!!
+
+
 ## Supported Lisps
 
-This package will wishfully run on any lisp supporting `bordeaux-threads`,
-which is most of them. 
+CLJ-CON _should_ run on lisps that support `bordeaux-threads` and
+`atomics` packages, but once you start pushing the various lisps hard
+your mileage may vary. See TESTED LISPS below.
 
 Lisps supporting the `atomics` package will use `compare-and-swap` behavior
 via `atomics:cas` for the `atom` implementation. At the time
@@ -54,63 +85,89 @@ in the various `atom` functions that require it.
 
 ## Tested Lisps
 
-Here are my experiences so far with Fedora 38 running on an Intel machine
-and tests run on some of the lisps.  Note that I am primarily an SBCL user
-and am not particularly familiar with the other lisps, their heap
-configurations, or even how to debug them since I didn't bother to enable
-them for SLIME, I just ran them from the command line.
+TL;DR: SBCL/ABCL/CCL behave well. Others (as tested), not so much.
 
-All tests were run with default memory configurations. I have no explanation
-for why some of them seem to be running out of memory, though some may be
-running with overly conservative heap sizes by default.
-The test suite allocates fewer than 50 threads, but the CLJ-CON package
-does expect threads to be (eventually) reclaimed when the lisp code running
-on them returns.
+Test results were using Fedora (V38 and V41) on a Intel X86_64 machine using
+default memory configurations of the respective implementations. 
+The test suite allocates about 50 threads, largely serially, but some lisps
+are better at thread and related resource reclamation than others.
 
-Given that the test suite does deliberately signal conditions in the bodies
-of many thread tests I suppose it's possible threads are hung and locks
-are not being released.  There are caveats about unpredicable unwind
-behavior w.r.t. locks in some of the tools used.
+By default, CLJ-CON-TEST:RUN-TESTS will run the test suite 50 times
+if the first pass succeeds. If this passes we generally say the
+implementation support is "GOOD". 
 
-All locking is done via `bt2:with-lock-held`.  If you want lisps that seem
-to keep chugging along even with many allocations, look for the ones I've
-labelled "GOOD".
+We also run the tests more extensively, either (or both) with
+`(run-tests 1000)` or `(dotimes (i 1000) (debug! 'test-suite))`
+(from the CLJ-CON-TEST package - both doing essentially the same thing with
+different levels of debuggability).
 
-- SBCL                                                    GOOD
+If more extensive runs fail, then the GOOD rating is going to be flagged
+as in some way, and possibly downgraded.  We know that FUTURE-CANCEL's use
+of BT:INTERRUPT-THREAD is _potentially_ problematic, depending on timing
+and lisp implementation.  Whether the failure is serious enough for you not
+to use FUTURE-CANCEL it is up to you. That a "GOOD" ranked implementation has
+tested hundreds of cancellations without issue bodes well, but it's really
+going to depend on what you do in your futures, and the unit tests are as
+near to do-nothing futures as you'll see (though there's a lot of cancelled
+`sleep` calls).
 
-  RUN-TESTS passes. 
-  `(dotimes (i 1000) (debug! 'test-suite))` passes.
+It's my observation that Clojure programmers rarely use FUTURE-CANCEL.
+Diligently written CLojure production threads are generally created with
+java interop to set thread names, "daemon" status, and so on, and service
+threads watch for a stop condition rather than waiting for an
+InterruptedException (though they watch for that too).  Still, the JVM
+let's you deliver interupts (benefitting FUTURE-CANCEL and ABCL), 
+whereas Lisp implementations not on the JVM have more challenges, though
+V1.0.1 changes seem to make FUTURE-CANCEL relatively robust.
 
-- CCL                                                     GOOD
+### SBCL (many versions up to 2.6.1)          GOOD
 
-  RUN-TESTS passes. 
-  `(dotimes (i 1000) (debug! 'test-suite))` passes.
+RUN-TESTS passes. 
 
-  The test seemed to slow a bit toward the end of the 1000 iterations, as
-  if perhaps a lot of gc activity were happening, but it did finish.
+`(run-tests 1000)` and `(dotimes (i 1000) (debug! 'test-suite))`
+both pass.
 
-- ABCL 1.9.0, OpenJDK 17.0.9                              GOOD (No CAS)
+### ABCL 1.9.2, OpenJDK 21.0.10               GOOD (No CAS)
 
-  RUN-TESTS passes. 
-  `(dotimes (i 1000) (debug! 'test-suite))` passes.
+RUN-TESTS passes. 
 
-  This now works but required special timeout logic because
-  BT2:CONDITION-WAIT _always_ returns T on ABCL.  Unfortunatey the logic
-  which fixes ABCL breaks tests on CCL, and perhaps others.
+`(run-tests 1000)` and `(dotimes (i 1000) (debug! 'test-suite))`
+both pass.
 
-- LispWorks 8.0.1 Personal Edition.                      UNRELIABLE
+This now works but required special timeout logic because
+BT2:CONDITION-WAIT _always_ returns T on ABCL.  Unfortunatey the logic
+which fixes ABCL breaks tests on CCL, and perhaps others.
 
-  RUN-TESTS passes. 
-  `(dotimes (i 1000) (debug! 'test-suite))` runs out of memory.
-  Lots of messages on the console "Hanging Unknown thread 5612"
+OpenJDK 17.0.9 was tested with ABCL 1.9.0 on CLJ-CON V1.0.0 some years ago and
+was not retested for V1.0.1. It worked fine when tested.
 
-  On a personal note. No init file with personal edition. Really?
+V1.0.1 was tested on OpenJDK 21.0.10 (which is not officially supported
+by ABCL) with ABCL 1.9.2 and V1.0.1, and also worked fine.
 
-- Allegro CL Express 11.0 (`alisp` executable)           UNRELIABLE
+### CCL 1.13 (lx86cl64 executable)          GOOD
 
-  RUN-TESTS passes. 
-  `(dotimes (i 1000) (debug! 'test-suite))` gets the following 
-  error after a number of iterations:
+RUN-TESTS passes. 
+
+`(run-tests 1000)` and `(dotimes (i 1000) (debug! 'test-suite))`
+both pass as well.
+
+### LispWorks 8.0.1 Personal Edition.                      UNRELIABLE
+
+RUN-TESTS passes in V1.0.0.  V1.0.1 was not tested.
+
+`(dotimes (i 1000) (debug! 'test-suite))` runs out of memory.
+Lots of messages on the console "Hanging Unknown thread 5612"
+
+I no longer test LispWorks, its intentional
+cripplings are such that I often can't even load common/basic lisp tools
+due to lack of memory, much less test my code.
+
+### Allegro CL Express 11.0 (`alisp` executable)           UNRELIABLE
+
+RUN-TESTS passes in V1.0.0.  V1.0.1 was not tested.
+
+`(dotimes (i 1000) (debug! 'test-suite))` gets the following 
+error after a number of iterations:
 
     Running test suite TEST-SUITE
      Running test PROMISE-DELIVERY ....
@@ -123,25 +180,87 @@ labelled "GOOD".
     for Allegro Common Lisp, and we will try to help determine whether
     this is a coding error or an internal bug.
 
-  The message suggests a gc bug, but maybe that's just a symptom of running
-  out of memory.
+The message suggests a gc bug, but maybe that's just a symptom of running
+out of memory. I filed a bug with Franz, but repeated attempts to test
+Allegro CL have been full of ugly process deaths and I no longer test with it.
 
-- ECL 21.2.1                                            UNRELIABLE
+### ECL 21.2.1                                            UNRELIABLE
 
-  Works for the minimal (run once) `clj-con-test:run-tests` case, but
-  runs out of memory if the test suite is run repeatedly.
+V1.0.0 works for the minimal `clj-con-test:run-tests` case, but
+runs out of memory if the test suite is run repeatedly.
 
+### ECL 26.5.5                                            UNRELIABLE
 
-## V1.0.0, possible breaking changes
+V1.0.1 passed the basic tests for one iterations but did not successfully
+reach 50 iterations. It eventually put out the the following errors:
+
+    ;; one of these
+    Condition of type: SIMPLE-ERROR
+    Attempted to recursively lock #<lock (nonrecursive) 0x7fac03a324b0> which is already owned by #<process "Unknown thread 767" 0x7fac02657240>
+
+    ;; a bunch of these
+    Condition of type: UNBOUND-VARIABLE
+    The variable SI:*BREAK-LOCALS* is unbound.
+
+    ;; And finally a few of these before dying or being killed by me
+    Excessive debugger depth! Probable infinite recursion!
+    Quitting process: #<process Unknown thread 767 0x7fac02657240>.
+
+## Changelog
+
+### V1.0.1
+
+#### Handling of abnormal stack unwinds
+
+A bug was fixed whereby the signalling of conditions that weren't subtypes
+of `ERROR`, such as occurs by calls to `WARN`, caused abnormal unwinding of the
+future/thread.
+
+Future threads now unwind only when the future exits normally
+or some semantically valid unwind occurs (such as unhandled conditions
+signalled with `ERROR`, or unwinds that occur without conditions such as via `THROW`.
+
+Note that unwound futures, at this time, _suppress_ invocation of the
+debugger if unhandled conditions arise. This is more for compatibility with
+Clojure than because it is or isn't "a good thing".  For now, if you really
+want to invoke the debugger, you need to set up a handler (in your FUTURE)
+for the desired conditions and call `CL:INVOKE-DEBUGGER`.
+
+#### FUTURE-CANCEL improvements
+
+The V1.0.0 behavior wasn't super tidy, was redundantly setting
+some internal state, and was causing multiple lisps to fail once I started
+using it more heavily in new V1.0.1 testing. 
+
+The V1.0.1 implementation is cleaner and also strives to avoid the use
+of BT:INTERRUPT-THREAD if it can.
+
+#### Added the FUTURE-UNWIND-CONDITION function
+
+This is a convenience when you're trying to reason about what went wrong
+with unwound futures, such as when you're diagnosing the failure of futures
+operating as service threads.
+
+#### Exported CANCELLATION-EXCEPTION, EXECUTION-EXCEPTION conditions
+
+These clojure/java namesakes are signalled by DEREF, now exported
+for your handler declaration needs.
+
+#### Added `*FUTURE-THREAD-NAME*` to enable naming of threads
+
+You can now bind `CLJ-CON:*FUTURE-THREAD-NAME*` to a string that will be
+used to name the thread created by any call to `FUTURE` in scope.
+Done this way (using special variables) in order to keep the API consistent
+with Clojure's (which does not allow for naming of future threads).
+
+### V1.0.0 
+
+#### POSSIBLE BREAKING CHANGES IN V1.0.0
 
 1. `compare-and-set!` now returns NIL and non-NIL, instead of
    strict NIL and T values. 
 2. `deliver` no longer returns the value delivered, it returns the input promise
    or nil according to clojure semantics, see the doc string for `deliver`.
-
-## Changelog
-
-### v1.0.0 
 
 #### Tested and fixed for multiple platforms.
 
@@ -163,7 +282,7 @@ hopefully without loss of functionality or introduction of bugs.
 The motiviation was to use `CONDITION-BROADCAST` which is not in APIV1
 and was forcing CLJ-CON code to loop on `CONDITION-NOTIFY`.
 
-### v0.1.0 - initial bordeaux-threads implementation
+### V0.1.0 - initial bordeaux-threads implementation
 
 Only tested with SBCL and ABCL, known to be broken on ECL.
 
@@ -217,7 +336,8 @@ much.
 There is no attempt here to bring clojure syntax or persistent data structures to
 Common Lisp.  Fortunately neither of those things is particularly prevalent in
 Clojure's concurrency operator model, at least not in the clojure.core
-namespace. 
+namespace. If you're looking for Clojure-style persistence, collections, sequences, 
+and data structure syntax, check out [clj-coll](https://github.com/dtenny/clj-coll).
 
 Some enterprising person might want to make a readtable that maps `@` to
 `deref`, assuming it doesn't conflict with `,@`, but that hasn't been done
@@ -284,7 +404,7 @@ When in doubt, add a binding that won't change for use in your closed over
 
 ## Feedback welcome
 
-`(reverse "moc.liamg@ynnet.evad")`
+`gitrepo-feedback@protonmail.com`
 
-This is a secondary address that isn't monitored every day.
-Feel free to submit Github issues if appropriate.
+Feel free to submit Github issues if appropriate. 
+LLM-generated issues are likely to be ignored.

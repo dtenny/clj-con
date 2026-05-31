@@ -6,7 +6,7 @@
 
   (:export
 
-   ;; From clj-con.lisp
+   ;; From clj-con.lisp, Clojure namesakes
    #:deliver
    #:deref
    #:future
@@ -17,6 +17,12 @@
    #:future?
    #:promise
    #:realized?
+   #:execution-exception                ;java namesake for semantic similarity on deref conditions
+   #:cancellation-exception             ;ditto
+
+   ;; From clj-con.lisp, extensions to what Clojure offers
+   #:future-unwind-condition            ;not part of Clojure's API
+   #:*future-thread-name*               ;to specify the name threads created by FUTURE
 
    ;; From atom.lisp
    #:atom
