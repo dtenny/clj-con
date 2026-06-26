@@ -134,9 +134,10 @@ RUN-TESTS passes.
 `(run-tests 1000)` and `(dotimes (i 1000) (debug! 'test-suite))`
 both pass.
 
-This now works but required special timeout logic because
+Requires special timeout logic because
 BT2:CONDITION-WAIT _always_ returns T on ABCL.  Unfortunatey the logic
-which fixes ABCL breaks tests on CCL, and perhaps others.
+which fixes ABCL breaks tests on CCL and perhaps others so the logic is
+conditional on the underlying lisp.
 
 OpenJDK 17.0.9 was tested with ABCL 1.9.0 on CLJ-CON V1.0.0 some years ago and
 was not retested for V1.0.1. It worked fine when tested.
@@ -206,7 +207,17 @@ reach 50 iterations. It eventually put out the the following errors:
     Excessive debugger depth! Probable infinite recursion!
     Quitting process: #<process Unknown thread 767 0x7fac02657240>.
 
+V1.0.2 Doesn't make it through 50 iterations. Same recursive lock errors.
+
 ## Changelog
+
+### V1.0.2
+
+#### Fix race conditions in promises
+
+Apparently in my zeal several years ago to avoid unnecessary locking I
+wrote some awful code related to promises. Should be working now, but don't
+believe me, look for yourself and let me know if you see problems.
 
 ### V1.0.1
 
@@ -401,6 +412,28 @@ The CL spec for [dotimes](http://clhs.lisp.se/Body/m_dotime.htm) says this:
 
 When in doubt, add a binding that won't change for use in your closed over
 `future` (or other) bodies.
+
+## Cautionary notes to CL devs
+
+The nuances of how half a dozen Common Lisp implementations may have
+implemented certain aspects of threading, environments, read, and write
+behaviors to data in a particular environment are beyond me.  However you probably
+shouldn't expect the assertion of (x) below to work.
+
+    (let* ((x 0)
+           (a (clj-con:atom x))
+           (f (future (dotimes (j 10) (swap! a #'1+)))))
+      (deref f)                   ;wait for future to complete
+
+      ;; This is okay, this is supported by CLJ-CON. 
+      (assert ( = 10 (deref a)))
+
+      ;; This is NOT okay, there's no guarantee that another thread mutated
+      ;; this binding and/or this threads interpretation of X.
+      (assert (= x 10)))
+
+You should probably read the section on cautionary notes to Clojure devs if
+this is a surprise to you.
 
 ## Feedback welcome
 

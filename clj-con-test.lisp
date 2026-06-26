@@ -109,7 +109,30 @@
   (is (eql :x  (deref (running-future) 10 :x)))
   (is (eql t   (deref (completed-future))))
   (signals clj-con::cancellation-exception (deref (cancelled-future)))
-  (signals clj-con::execution-exception (deref (thrown-future))))
+  (signals clj-con::execution-exception (deref (thrown-future)))
+
+  ;; Test for race conditions in promises and interaction with deref.
+  (let* ((x 0)
+         (a (clj-con:atom x))
+         (f (future (dotimes (j 10) (swap! a #'1+)))))
+    (is (null (deref f)))               ;wait for future to complete
+    (is (realized? f))
+    (is ( = 10 (deref a))))
+
+  ;; Longer race condition test on promise behavior (internal to future)
+  (let* ((x 0)
+         (a (clj-con:atom x))
+         (futures (make-array 10 :fill-pointer 0)))
+    (dotimes (i 10) 
+      (vector-push (future (dotimes (j 100) (swap! a #'1+))) futures))
+    (dotimes (i 10)
+      (deref (aref futures i)))         ;wait for threads to complete
+    (assert (= 1000 (deref a)))
+    ;; Note that we cannot reliably assert the value of X here, it will depend on
+    ;; how the CL implementation wants to implement access to a closed over X in a thread.
+    ;; Or such is my guess.  On sbcl 2.6.1 X will be zero, even though the deref of the atom
+    ;; is fine (because the atom ls dealing with the data in a context that works across threads).
+    #+(OR)(assert (= 1000 x))))
 
 (define-condition a-plain-condition () ())
 (define-condition an-error-condition (error) ())

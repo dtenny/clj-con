@@ -83,7 +83,7 @@ Named for similarity to clojure/java behavior on deref."))
 
 (defun promise-realized? (p)
   "True if value has been supplied, caller must lock before calling."
-  (not (eql (promise-value p) (promise-condition-variable p))))
+  (null (promise-condition-variable p)))
 
 (defun promise ()
   "Returns a promise object that can be read with `deref` and set,
@@ -192,12 +192,12 @@ parity with Clojure's arity-1 and arity-3 (but no arity-2) calls.")
   ;; variable timeout specifications.
   (:method ((p promise) &optional (timeout-ms nil timeout-supplied-p) timeout-val)
     (let ((timeout-secs (and timeout-supplied-p (/ timeout-ms 1000)))
-          (cv (promise-condition-variable p))
           (lock (promise-lock p)))
       (when timeout-secs
         (assert (>= timeout-secs 0)))
       (bt2:with-lock-held (lock)
-        (loop until (promise-realized? p)
+        (loop as cv = (promise-condition-variable p)
+              while cv
               do (unless (bt2:condition-wait cv lock :timeout timeout-secs)
                    (return timeout-val)) ;NIL waitval == timeout
                  ;; ABCL _always_ returns true on CONDITION-WAIT
