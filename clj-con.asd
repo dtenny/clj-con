@@ -13,7 +13,7 @@
   (pushnew :clj-con-use-atomics *features*))
 
 (defsystem :clj-con
-  :version "1.0.2"
+  :version "1.0.3"
   :license "MIT"
   :author "Dave Tenny"
   :description "Clojure-style concurrency operations like `future`, `promise`, and `atom`."

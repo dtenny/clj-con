@@ -211,6 +211,10 @@ V1.0.2 Doesn't make it through 50 iterations. Same recursive lock errors.
 
 ## Changelog
 
+### V1.0.3
+
+Remove/correct command and readme fallacies added in the previous revision.
+
 ### V1.0.2
 
 #### Fix race conditions in promises
@@ -412,28 +416,6 @@ The CL spec for [dotimes](http://clhs.lisp.se/Body/m_dotime.htm) says this:
 
 When in doubt, add a binding that won't change for use in your closed over
 `future` (or other) bodies.
-
-## Cautionary notes to CL devs
-
-The nuances of how half a dozen Common Lisp implementations may have
-implemented certain aspects of threading, environments, read, and write
-behaviors to data in a particular environment are beyond me.  However you probably
-shouldn't expect the assertion of (x) below to work.
-
-    (let* ((x 0)
-           (a (clj-con:atom x))
-           (f (future (dotimes (j 10) (swap! a #'1+)))))
-      (deref f)                   ;wait for future to complete
-
-      ;; This is okay, this is supported by CLJ-CON. 
-      (assert ( = 10 (deref a)))
-
-      ;; This is NOT okay, there's no guarantee that another thread mutated
-      ;; this binding and/or this threads interpretation of X.
-      (assert (= x 10)))
-
-You should probably read the section on cautionary notes to Clojure devs if
-this is a surprise to you.
 
 ## Feedback welcome
 

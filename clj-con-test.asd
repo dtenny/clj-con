@@ -6,7 +6,7 @@
 (in-package :clj-con-test-asd)
 
 (defsystem :clj-con-test
-  :version "0.1.2"
+  :version "0.1.3"
   :license "MIT"
   :author "Dave Tenny"
   :description "Tests for the :clj-con package."
